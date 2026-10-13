@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: MIT
 // What we ask the AI. An object has two halves, its look and its behavior,
 // and the AI makes each one on its own, so each task stays small.
@@ -234,7 +235,10 @@ export const behaviorAI = {
             radius: { type: "number" },
             damage: { type: "number" },
             target: { type: "string", enum: targets },
-            toward: { type: "string", enum: directions }
+            toward: { type: "string", enum: directions },
+            speed: { type: "number" },
+            tags: { type: "array", maxItems: 3, items: { type: "string" } },
+            move: { type: "string", enum: moves }
           },
           required: ["when", "do"]
         }
@@ -259,7 +263,10 @@ export const behaviorAI = {
     "reactions, up to " + maxReactions + ": when is click, touch, wall, timer (every: 1 to 30 seconds), " +
     "hurt or destroyed. do is jump, spin, grow, burst, say (one emoji), hide, explode (radius, damage), " +
     "damage, destroy or push (target: self, other or near), shoot (toward: nearest, left, right, up or down) " +
-    "or spawn (one emoji, for example an apple).",
+    "or spawn (one emoji, for example an apple). " +
+    "Shoot and push can use speed: 1 to 10. Shoot, damage, destroy and push can use tags: " +
+    "up to 3 lowercase group names (e.g. animal) to limit their targets. " +
+    "Spawn can use move: one of the movement types listed above.",
 
   examples: [
     { prompt: "a small house", answer: { traits: ["wall"], move: still, effects: [], reactions: [] } },
