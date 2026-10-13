@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: MIT -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>SandBoxed — model benchmark</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { max-width: 1100px; }
+  fieldset { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; border: 1px solid #ccc; padding: 14px; }
+  label { display: inline-grid; gap: 3px; }
+  #hardware { width: 18em; }
+  #codeRef { width: 19em; }
+  #summary { margin: 16px 0; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; border-bottom: 1px solid #ddd; padding: 7px; vertical-align: top; }
+  th { white-space: nowrap; }
+  td:nth-child(2) { min-width: 210px; }
+  details { max-width: 430px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; overflow-y: auto; }
+  .actions { margin: 12px 0; }
+  .note { color: #555; }
+  button { margin-bottom: 6px; }
+</style>
+<script type="module" src="js/benchmark.js"></script>
+</head>
+<body>
+<h1>SandBoxed model benchmark</h1>
+<p class="note">Initial test set: six fixed prompts, icon look, and behavior generation.</p>
+<p>Uses the same icon + behavior generation, prompt filtering and final validation as the game.
+  <a href="index.html">Choose or download your AI model in SandBoxed first</a>, then return here.
+  Runs happen locally through the selected provider.</p>
+
+<p id="selectedModel" class="note">Checking selected model…</p>
+<fieldset>
+  <label>Runs per prompt
+    <input id="repeats" type="number" min="1" max="5" value="3">
+  </label>
+  <label>Hardware description (optional)
+    <input id="hardware" type="text" placeholder="e.g. integrated GPU, laptop" maxlength="120">
+  </label>
+  <label>Code reference (recommended)
+    <input id="codeRef" type="text" placeholder="commit SHA or branch name" maxlength="120">
+  </label>
+</fieldset>
+<div class="actions">
+  <button id="run">Run benchmark</button>
+  <button id="stop" disabled>Stop after current case</button>
+  <button id="json" disabled>Download JSON</button>
+  <button id="csv" disabled>Download CSV</button>
+</div>
+<p id="progress" role="status" aria-live="polite">Ready.</p>
+<p id="summary" class="note">No results yet.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Run</th><th>Prompt</th><th>Look</th><th>Behavior</th><th>Final validation</th><th>Behavior check</th><th>Total (ms)</th><th>Details</th></tr></thead>
+<tbody id="results"></tbody>
+</table>
+</div>
+<p class="note">Behavior checks cover the specified actions and conditions, not visual accuracy or overall quality.
+  A valid JSON response can still miss the user's intent. Record the code revision and hardware when comparing models.
+  Retry counts reflect validation retries; provider and JSON parsing errors may end a run without a retry.
+  The first measured case may include model startup time.</p>
+</body>
+</html>
