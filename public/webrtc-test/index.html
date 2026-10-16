@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebRTC + Signaling - SandBoxed</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 700px;
+      margin: 30px auto;
+      padding: 0 16px;
+      background: #111;
+      color: #eee;
+    }
+    h1 { font-size: 1.4rem; }
+    .box {
+      background: #1c1c1c;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-right: 8px;
+      margin-top: 8px;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    input {
+      width: 100%;
+      padding: 8px 12px;
+      background: #111;
+      border: 1px solid #444;
+      border-radius: 6px;
+      color: #eee;
+      margin-top: 8px;
+    }
+    #log {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 12px;
+      height: 220px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+    .status {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 13px;
+      margin-left: 8px;
+    }
+    .disconnected { background: #7f1d1d; }
+    .connecting { background: #854d0e; }
+    .connected { background: #14532d; }
+    .room-id {
+      font-size: 1.3rem;
+      font-weight: bold;
+      color: #60a5fa;
+      letter-spacing: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>SandBoxed WebRTC Test <span id="status" class="status disconnected">Disconnected</span></h1>
+
+  <!-- Name -->
+  <div class="box">
+    <strong>Your Name</strong>
+    <input type="text" id="playerName" placeholder="Enter your name (e.g. Ram, Sita, Host)">
+  </div>
+
+  <!-- Host Section -->
+  <div class="box">
+    <strong>Host</strong><br>
+    <button id="createRoomBtn">Create Room</button>
+    <div id="roomInfo" style="margin-top:12px; display:none;">
+      Room ID: <span class="room-id" id="roomIdDisplay"></span>
+      <p style="color:#aaa; margin:6px 0 0;">Share this ID with other players</p>
+    </div>
+  </div>
+
+  <!-- Player Section -->
+  <div class="box">
+    <strong>Join as Player</strong><br>
+    <input type="text" id="joinRoomInput" placeholder="Enter Room ID">
+    <button id="joinRoomBtn">Join Room</button>
+  </div>
+
+  <!-- Messaging -->
+  <div class="box">
+    <strong>Messages</strong><br>
+    <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+    <button id="sendBtn" disabled>Send</button>
+    <br><br>
+    <div id="log">Ready...</div>
+  </div>
+
+  <script>
+    const SIGNALING_URL = "ws://127.0.0.1:8787";
+    const API_URL = "http://127.0.0.1:8787";
+
+    let ws = null;
+    let pc = null;
+    let channel = null;
+    let myName = "";
+    let myId = null;
+    let roomId = null;
+    let isHost = false;
+
+    // Host stores connections: playerId → { pc, channel, name }
+    const peerConnections = new Map();
+
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+
+    function log(msg) {
+      logEl.textContent += msg + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text, className) {
+      statusEl.textContent = text;
+      statusEl.className = "status " + className;
+    }
+
+    function getName() {
+      const name = document.getElementById("playerName").value.trim();
+      if (!name) {
+        alert("Please enter your name first");
+        return null;
+      }
+      return name;
+    }
+
+    // ========== Create Room (Host) ==========
+    document.getElementById("createRoomBtn").onclick = async () => {
+      myName = getName();
+      if (!myName) return;
+
+      try {
+        const res = await fetch(API_URL + "/create", { method: "POST" });
+        const data = await res.json();
+        roomId = data.roomId;
+
+        document.getElementById("roomIdDisplay").textContent = roomId;
+        document.getElementById("roomInfo").style.display = "block";
+        document.getElementById("createRoomBtn").disabled = true;
+        document.getElementById("playerName").disabled = true;
+
+        connectAsHost(roomId);
+      } catch (err) {
+        log("Error creating room: " + err.message);
+      }
+    };
+
+    function connectAsHost(roomId) {
+      isHost = true;
+      myId = crypto.randomUUID().slice(0, 8);
+
+      ws = new WebSocket(`${SIGNALING_URL}/room/${roomId}?role=host&playerId=${myId}&name=${encodeURIComponent(myName)}`);
+
+      ws.onopen = () => {
+        log(`Host "${myName}" connected`);
+        setStatus("Waiting for players...", "connecting");
+      };
+
+      ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "joined") {
+          log("Joined as Host");
+        }
+
+        if (msg.type === "player-joined") {
+          log(`Player joined: ${msg.name || msg.playerId}`);
+          await createOfferForPlayer(msg.playerId, msg.name || "Player");
+        }
+
+        if (msg.type === "answer") {
+          const peer = peerConnections.get(msg.from);
+          if (peer) {
+            await peer.pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+            log(`Answer received from ${peer.name}`);
+          }
+        }
+
+        if (msg.type === "ice") {
+          const peer = peerConnections.get(msg.from);
+          if (peer && msg.candidate) {
+            await peer.pc.addIceCandidate(msg.candidate);
+          }
+        }
+      };
+
+      ws.onclose = () => {
+        log("Disconnected from signaling server");
+        setStatus("Disconnected", "disconnected");
+      };
+    }
+
+    async function createOfferForPlayer(playerId, playerName) {
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
+
+      const channel = pc.createDataChannel("sandboxed");
+      setupChannel(channel, playerId, playerName);
+
+      peerConnections.set(playerId, { pc, channel, name: playerName });
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: "ice",
+            to: playerId,
+            candidate: event.candidate
+          }));
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      ws.send(JSON.stringify({
+        type: "offer",
+        to: playerId,
+        sdp: offer.sdp
+      }));
+
+      log(`Offer sent to ${playerName}`);
+    }
+
+    // ========== Join Room (Player) ==========
+    document.getElementById("joinRoomBtn").onclick = () => {
+      myName = getName();
+      if (!myName) return;
+
+      const inputId = document.getElementById("joinRoomInput").value.trim();
+      if (!inputId) {
+        alert("Please enter a Room ID");
+        return;
+      }
+
+      roomId = inputId;
+      document.getElementById("playerName").disabled = true;
+      document.getElementById("joinRoomBtn").disabled = true;
+      connectAsPlayer(roomId);
+    };
+
+    function connectAsPlayer(roomId) {
+      isHost = false;
+      myId = crypto.randomUUID().slice(0, 8);
+
+      ws = new WebSocket(`${SIGNALING_URL}/room/${roomId}?role=player&playerId=${myId}&name=${encodeURIComponent(myName)}`);
+
+      ws.onopen = () => {
+        log(`Player "${myName}" connected`);
+        setStatus("Connecting...", "connecting");
+      };
+
+      ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "joined") {
+          log("Joined as Player");
+        }
+
+        if (msg.type === "offer") {
+          await handleOffer(msg.from, msg.sdp);
+        }
+
+        if (msg.type === "ice") {
+          if (pc && msg.candidate) {
+            await pc.addIceCandidate(msg.candidate);
+          }
+        }
+      };
+
+      ws.onclose = () => {
+        log("Disconnected from signaling server");
+        setStatus("Disconnected", "disconnected");
+      };
+    }
+
+    async function handleOffer(fromId, sdp) {
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
+
+      pc.ondatachannel = (event) => {
+        channel = event.channel;
+        setupChannel(channel, fromId, "Host");
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: "ice",
+            to: fromId,
+            candidate: event.candidate
+          }));
+        }
+      };
+
+      await pc.setRemoteDescription({ type: "offer", sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      ws.send(JSON.stringify({
+        type: "answer",
+        sdp: answer.sdp
+      }));
+
+      log("Answer sent to Host");
+    }
+
+    // ========== Data Channel ==========
+    function setupChannel(ch, peerId, peerName) {
+      ch.onopen = () => {
+        log(`Connected with ${peerName}`);
+        setStatus("Connected", "connected");
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+      };
+
+      ch.onmessage = (event) => {
+        log(event.data);
+      };
+
+      ch.onclose = () => {
+        log(`Disconnected from ${peerName}`);
+      };
+
+      if (isHost && peerConnections.has(peerId)) {
+        peerConnections.get(peerId).channel = ch;
+      } else {
+        channel = ch;
+      }
+    }
+
+    // ========== Send Message ==========
+    sendBtn.onclick = () => {
+      const text = messageInput.value.trim();
+      if (!text) return;
+
+      const fullMessage = `${myName}: ${text}`;
+
+      if (isHost) {
+        // Host sends to all players
+        for (const [id, peer] of peerConnections) {
+          if (peer.channel && peer.channel.readyState === "open") {
+            peer.channel.send(fullMessage);
+          }
+        }
+        log(fullMessage);
+      } else {
+        // Player sends to host
+        if (channel && channel.readyState === "open") {
+          channel.send(fullMessage);
+          log(fullMessage);
+        }
+      }
+
+      messageInput.value = "";
+    };
+
+    messageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendBtn.click();
+    });
+  </script>
+</body>
+</html>
