@@ -360,28 +360,213 @@ function mentions(text, list) {
   return list.some(function (word) { return new RegExp("\\b" + word).test(text); });
 }
 
-// Keep only what the player asked for: each trait, move, effect and reaction needs its words
-// in the text. This stops the AI from adding things that nobody wanted, like a happy cat that pulses.
-// The traits are then turned into rules.
+// A prompt may restrict a reaction to a named group. Only groups supported by
+// the object traits can be inferred; narrower names must not become broad tags.
+const reactionVerbs = {
+  shoot: /\b(?:shoots?|shooting|fires?|firing|aims?|aimed|aiming|targets?|targeting)\b/g,
+  damage: /\b(?:damages?|damaging|hurts?|harming|attacks?)\b/g,
+  destroy: /\b(?:destroys?|destroying|kills?|killing)\b/g,
+  push: /\b(?:push(?:es)?|pushing|shoves?|shoving)\b/g,
+  spawn: /\b(?:spawns?|spawning|drops?|dropping|lays?|laying|produces?|producing)\b/g,
+  explode: /\b(?:explodes?|exploding|blows? up)\b/g,
+  say: /\b(?:says?|saying|speaks?|speaking|shouts?|shouting|meows?|barks?)\b/g
+};
+
+function reactionClauses(text) {
+  const boundary = /\s+(?:and|then|but)\s+(?=(?:every\s+\d+(?:\.\d+)?\s+seconds?\s+)?(?:shoot|fire|spawn|drop|push|shove|damage|hurt|destroy|kill|produce|create|lay|explode|say|speak|shout|meow|bark|glow|blink|spin)\w*\b)|[,;]/;
+  return text.split(boundary).map(function (part) { return part.trim(); });
+}
+
+function actionClause(text, action) {
+  const verb = reactionVerbs[action];
+  if (!verb) return [];
+  return reactionClauses(text).filter(function (part) {
+    verb.lastIndex = 0;
+    return verb.test(part);
+  });
+}
+
+function requestedInterval(text, action, reactionCount) {
+  const interval = /\bevery\s+(\d+(?:\.\d+)?)\s+seconds?\b/;
+  for (const clause of actionClause(text, action)) {
+    const match = clause.match(interval);
+    if (match) return Number(match[1]);
+  }
+  // An unqualified timer can be used when there is only one timed reaction.
+  if (reactionCount === 1 && !Object.keys(reactionVerbs).some(function (other) {
+    return other !== action && actionClause(text, other).length > 0;
+  })) {
+    const match = text.match(interval);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function targetRestriction(text, action) {
+  if (!["shoot", "damage", "destroy", "push"].includes(action)) return null;
+  for (const clause of actionClause(text, action)) {
+    const verb = reactionVerbs[action];
+    verb.lastIndex = 0;
+    const actionMatch = verb.exec(clause);
+    if (!actionMatch) continue;
+    const targetText = clause.slice(actionMatch.index + actionMatch[0].length);
+    if (/\b(?:except|excluding|other than|without|nothing|nobody|no one|none)\b|\bat\s+no\b|\bnon[-\s]?animals?\b/.test(targetText)) {
+      return { tags: [], unsupported: true };
+    }
+    const match = targetText.match(/\b(?:at|against)\s+(?:only\s+)?(?:the\s+|all\s+|any\s+)?([a-z]+)(?:\s+and\s+(?:the\s+)?(animals?|plants?|cats?|dogs?))?/)
+      || targetText.match(/^\s+(?:only\s+)?(?:the\s+)?(animals?|plants?|cats?|dogs?)\b/);
+    if (!match) {
+      if (/\bonly\b/.test(targetText) &&
+          !/\bonly\s+(?:when|if|on|to|toward|straight|left|right|up|down|upward|downward|upwards|downwards|every)\b/.test(targetText)) {
+        return { tags: [], unsupported: true };
+      }
+      continue;
+    }
+    const negatives = /\b(?:does\s+not|doesn't|don't|never|not)\s+(?:\w+\s+){0,2}(?:shoot|fire|damage|hurt|destroy|kill|push|shove)/;
+    if (negatives.test(clause)) return { tags: [], unsupported: true };
+    const words = [match[1], match[2]].filter(Boolean);
+    const groups = words.map(function (word) {
+      if (/^animals?$/.test(word)) return "animal";
+      if (/^plants?$/.test(word)) return "plant";
+      return null;
+    });
+    const explicitOnly = /\bonly\b/.test(clause.slice(actionMatch.index, actionMatch.index + actionMatch[0].length + match.index + match[0].length));
+    if ((explicitOnly || words.some(function (word) { return /^(?:cats?|dogs?)$/.test(word); })) && groups.includes(null)) return { tags: [], unsupported: true };
+    const tags = Array.from(new Set(groups.filter(Boolean)));
+    if (tags.length) return { tags: tags, unsupported: false };
+  }
+  return null;
+}
+
+function requestedDirection(text) {
+  for (const clause of actionClause(text, "shoot")) {
+    const match = clause.match(/\b(?:shoots?|shooting|fires?|firing)\s+(?:only\s+)?(?:straight\s+)?(?:to\s+the\s+|toward\s+the\s+)?(left|right|up|down|upwards?|downwards?)\b/);
+    if (match) return match[1].replace(/wards?$/, "");
+  }
+  return null;
+}
+
+const negatedExplosion = /\b(?:never|do(?:es)?\s+not|don['’]t|doesn['’]t|must\s+not|cannot|can['’]t)\s+(?:\w+\s+){0,2}(?:explod\w*|blow(?:s)?\s+up)\b/;
+
+function requestedTrigger(text, action) {
+  const clauses = actionClause(text, action);
+  if (!clauses.length && action === "shoot" && mentions(text, traitWords.gun)) {
+    clauses.push(...reactionClauses(text));
+  }
+  for (const clause of clauses) {
+    if (action === "explode" && negatedExplosion.test(clause)) continue;
+    const match = clause.match(/\b(?:when|on|if)\s+(?:(?:it\s+is|you|someone|the\s+object\s+is)\s+)?(clicked|touched|hurt|destroyed|click|touch)\b/);
+    if (match) return ({ clicked: "click", touched: "touch" })[match[1]] || match[1];
+  }
+  return null;
+}
+
+function negatedAction(text, action) {
+  const verbs = {
+    shoot: "shoot|fire",
+    damage: "damage|hurt",
+    destroy: "destroy|kill",
+    push: "push|shove",
+    spawn: "spawn|drop|lay|produce"
+  };
+  const pattern = verbs[action];
+  if (!pattern) return false;
+  const negative = new RegExp("\\b(?:never|do(?:es)?\\s+not|don['’]t|doesn['’]t|must\\s+not|cannot|can['’]t)\\s+(?:\\w+\\s+){0,2}(?:" + pattern + ")\\w*\\b");
+  return actionClause(text, action).some(function (clause) { return negative.test(clause); });
+}
+
+// A negated explosion may rule out one trigger or the action altogether.
+function excludedExplosions(text) {
+  const triggers = new Set();
+  let all = false;
+  const triggerWords = /^(?:when|on|if)\s+(?:(?:it|the bomb|the object)\s+is\s+)?(touched|clicked|destroyed|hurt)\b/;
+  const names = { touched: "touch", clicked: "click", destroyed: "destroyed", hurt: "hurt" };
+  for (const clause of actionClause(text, "explode")) {
+    const negative = new RegExp(negatedExplosion.source, "g");
+    let match;
+    while ((match = negative.exec(clause))) {
+      const condition = clause.slice(match.index + match[0].length).trimStart().match(triggerWords);
+      if (condition) triggers.add(names[condition[1]]);
+      else all = true;
+    }
+    const shortNegative = /\b(?:not|never)\s+(?:when|on|if)\s+(?:(?:it|the bomb|the object)\s+is\s+)?(touched|clicked|destroyed|hurt)\b/g;
+    while ((match = shortNegative.exec(clause))) triggers.add(names[match[1]]);
+  }
+  return { all: all, triggers: triggers };
+}
+
+// Restrict the bomb preset only when the explosion itself has an explicit
+// exclusion or an exclusive trigger.
+function excludesPresetDestroyed(text, trigger) {
+  return actionClause(text, "explode").some(function (clause) {
+    if (/\b(?:not|never)\s+(?:explodes?\s+)?(?:when|on|if)\s+(?:(?:it|the bomb)\s+is\s+)?destroyed\b/.test(clause)) return true;
+    const exclusive = /\b(?:only\s+(?:explodes?\s+)?|explodes?\s+only\s+)(?:when|on|if)\b/.test(clause);
+    return exclusive && trigger !== "destroyed";
+  });
+}
+
+// Preserve trait defaults while applying conditions grounded in the request.
 export function askedFor(data, text) {
   const t = " " + text.toLowerCase() + " ";
   const behavior = { move: still, effects: [], reactions: [] };
   (data.traits || []).forEach(function (name) {
     if (traits[name] && mentions(t, traitWords[name])) addTrait(behavior, traits[name]);
   });
+  // Keep track of destroyed reactions supplied by object presets. They allow
+  // chain reactions even when the prompt requests a separate activation trigger.
+  const presetDestroyed = new Set(behavior.reactions.filter(function (reaction) {
+    return reaction.when === "destroyed";
+  }));
   const move = data.move || still;
-  if (move.type !== "none" && mentions(t, words[move.type])) behavior.move = move;
-  (data.effects || []).forEach(function (e) {
-    if (mentions(t, words[e.type])) behavior.effects.push(e);
+  if (move.type !== "none" && words[move.type] && mentions(t, words[move.type])) behavior.move = move;
+  (data.effects || []).forEach(function (effect) {
+    if (words[effect.type] && mentions(t, words[effect.type])) behavior.effects.push(effect);
   });
-  (data.reactions || []).forEach(function (r) {
-    if (mentions(t, words[r.when]) && mentions(t, words[r.do])) behavior.reactions.push(r);
+
+  (data.reactions || []).forEach(function (reaction) {
+    if (!words[reaction.do] || !mentions(t, words[reaction.do])) return;
+    const matchIndex = behavior.reactions.findIndex(function (r) {
+      return r.when === reaction.when && r.do === reaction.do;
+    });
+    const clauses = actionClause(t, reaction.do);
+    const explicitTrigger = words[reaction.when] && (clauses.length ? clauses : reactionClauses(t)).some(function (clause) {
+      return mentions(clause, words[reaction.when]);
+    });
+    const implicitShot = reaction.when === "timer" && reaction.do === "shoot" &&
+      clauses.length > 0 && !clauses.some(function (clause) { return /\b(?:when|on|if)\b/.test(clause); });
+    if (matchIndex < 0 && !explicitTrigger && !implicitShot) return;
+    if (matchIndex < 0) behavior.reactions.push(Object.assign({}, reaction));
   });
-  // The same reaction twice is kept once, and there are limits.
+
+  // A preset can be used without an explicit trigger, but a model-generated
+  // action still needs grounding in the request.
+  const timerCount = behavior.reactions.filter(function (r) { return r.when === "timer"; }).length;
+  const blockedExplosions = excludedExplosions(t);
   const seen = new Set();
-  behavior.reactions = behavior.reactions.filter(function (r) {
-    const key = r.when + " " + r.do;
-    if (seen.has(key)) return false;
+  behavior.reactions = behavior.reactions.filter(function (reaction) {
+    const key = reaction.when + " " + reaction.do;
+    if (seen.has(key) || negatedAction(t, reaction.do)) return false;
+    if (reaction.do === "explode" &&
+        (blockedExplosions.all || blockedExplosions.triggers.has(reaction.when))) return false;
+    const trigger = requestedTrigger(t, reaction.do);
+    const destroyedPreset = presetDestroyed.has(reaction);
+    if (destroyedPreset && excludesPresetDestroyed(t, trigger)) return false;
+    if (trigger && trigger !== reaction.when && !destroyedPreset) return false;
+    if (reaction.when === "timer" && !trigger && actionClause(t, reaction.do).some(function (clause) {
+      return /\b(?:when|whenever|if|unless)\b/.test(clause);
+    })) return false;
+    const restriction = targetRestriction(t, reaction.do);
+    if (restriction && restriction.unsupported) return false;
+    if (restriction && restriction.tags.length) reaction.tags = restriction.tags;
+    else delete reaction.tags;
+    if (reaction.when === "timer") {
+      const interval = requestedInterval(t, reaction.do, timerCount);
+      if (interval !== null) reaction.every = interval;
+    }
+    if (reaction.do === "shoot") {
+      const direction = requestedDirection(t);
+      if (direction) reaction.toward = direction;
+    }
     seen.add(key);
     return true;
   }).slice(0, maxReactions);
