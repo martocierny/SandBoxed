@@ -3,7 +3,7 @@
 A 2D multiplayer sandbox in the browser, where players build the world by describing objects
 in plain words and the AI on their computer turns those words into objects.
 
-**Live demo:** https://sandboxed.martincierny371.workers.dev
+**Live demo:** https://sandboxed.martocierny.workers.dev/
 
 ## The idea
 
@@ -116,7 +116,7 @@ A page cannot delete the model. To remove it: Chrome Settings → System → On-
 The server must allow calls from the game's address (CORS):
 
 Ollama: set `OLLAMA_ORIGINS` to the game's address before starting
-  (e.g. `https://sandboxed.martincierny371.workers.dev`). Server address: `http://localhost:11434/v1`.
+  (e.g. `https://sandboxed.martocierny.workers.dev`). Server address: `http://localhost:11434/v1`.
 LM Studio: start the server with CORS on, e.g. `lms server start --cors`.
   Server address: `http://localhost:1234/v1`.
 
