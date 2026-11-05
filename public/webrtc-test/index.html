@@ -4,109 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WebRTC + Signaling - SandBoxed</title>
+  <link rel="stylesheet" href="../style.css">
   <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: system-ui, sans-serif;
-      max-width: 700px;
-      margin: 30px auto;
-      padding: 0 16px;
-      background: #111;
-      color: #eee;
-    }
-    h1 { font-size: 1.4rem; }
-    .box {
-      background: #1c1c1c;
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-    }
-    button {
-      background: #3b82f6;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      margin-right: 8px;
-      margin-top: 8px;
-    }
-    button:hover { background: #2563eb; }
-    button:disabled { background: #555; cursor: not-allowed; }
-    input {
-      width: 100%;
-      padding: 8px 12px;
-      background: #111;
-      border: 1px solid #444;
-      border-radius: 6px;
-      color: #eee;
-      margin-top: 8px;
-    }
+    /* The log is the only part the game has no style for. */
     #log {
-      background: #0a0a0a;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 12px;
+      border: 1px solid #000;
       height: 220px;
       overflow-y: auto;
+      padding: 8px;
       font-family: monospace;
       font-size: 13px;
       white-space: pre-wrap;
-    }
-    .status {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 13px;
-      margin-left: 8px;
-    }
-    .disconnected { background: #7f1d1d; }
-    .connecting { background: #854d0e; }
-    .connected { background: #14532d; }
-    .room-id {
-      font-size: 1.3rem;
-      font-weight: bold;
-      color: #60a5fa;
-      letter-spacing: 2px;
     }
   </style>
 </head>
 <body>
 
-  <h1>SandBoxed WebRTC Test <span id="status" class="status disconnected">Disconnected</span></h1>
+  <h1>SandBoxed WebRTC Test <span id="status" class="bad">Disconnected</span></h1>
 
-  <!-- Name -->
-  <div class="box">
-    <strong>Your Name</strong>
-    <input type="text" id="playerName" placeholder="Enter your name (e.g. Ram, Sita, Host)">
+  <h2>Your name</h2>
+  <p>
+    <input type="text" id="playerName" placeholder="Enter your name, for example Ram, Sita or Host">
+  </p>
+
+  <h2>Host</h2>
+  <p><button id="createRoomBtn">Create Room</button></p>
+  <div id="roomInfo" hidden>
+    <p>Room ID: <code id="roomIdDisplay"></code></p>
+    <p class="wait">Share this ID with other players.</p>
   </div>
 
-  <!-- Host Section -->
-  <div class="box">
-    <strong>Host</strong><br>
-    <button id="createRoomBtn">Create Room</button>
-    <div id="roomInfo" style="margin-top:12px; display:none;">
-      Room ID: <span class="room-id" id="roomIdDisplay"></span>
-      <p style="color:#aaa; margin:6px 0 0;">Share this ID with other players</p>
-    </div>
-  </div>
+  <h2>Join as Player</h2>
+  <p><input type="text" id="joinRoomInput" placeholder="Enter Room ID"></p>
+  <p><button id="joinRoomBtn">Join Room</button></p>
 
-  <!-- Player Section -->
-  <div class="box">
-    <strong>Join as Player</strong><br>
-    <input type="text" id="joinRoomInput" placeholder="Enter Room ID">
-    <button id="joinRoomBtn">Join Room</button>
-  </div>
-
-  <!-- Messaging -->
-  <div class="box">
-    <strong>Messages</strong><br>
-    <input type="text" id="messageInput" placeholder="Type a message..." disabled>
-    <button id="sendBtn" disabled>Send</button>
-    <br><br>
-    <div id="log">Ready...</div>
-  </div>
+  <h2>Messages</h2>
+  <p><input type="text" id="messageInput" placeholder="Type a message..." disabled></p>
+  <p><button id="sendBtn" disabled>Send</button></p>
+  <div id="log">Ready...</div>
 
   <script>
     // The signaling server is the local wrangler dev server by default.
@@ -203,9 +138,12 @@
       logEl.scrollTop = logEl.scrollHeight;
     }
 
-    function setStatus(text, className) {
+    // The game styles status text with its .ok, .wait and .bad classes.
+    const statusClasses = { connected: "ok", connecting: "wait", disconnected: "bad" };
+
+    function setStatus(text, state) {
       statusEl.textContent = text;
-      statusEl.className = "status " + className;
+      statusEl.className = statusClasses[state] || "wait";
     }
 
     function getName() {
@@ -228,7 +166,7 @@
         roomId = data.roomId;
 
         document.getElementById("roomIdDisplay").textContent = roomId;
-        document.getElementById("roomInfo").style.display = "block";
+        document.getElementById("roomInfo").hidden = false;
         document.getElementById("createRoomBtn").disabled = true;
         document.getElementById("playerName").disabled = true;
 
