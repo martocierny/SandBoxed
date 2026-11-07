@@ -1,0 +1,11 @@
+# Local wrangler state (databases, caches, logs)
+.wrangler/
+
+# Dependencies
+node_modules/
+
+# Local secrets
+.dev.vars
+
+# Logs
+*.log
