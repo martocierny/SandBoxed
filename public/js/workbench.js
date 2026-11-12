@@ -9,6 +9,7 @@ import { script, objectScript, behaviorOf } from "./script.js";
 import { drawObject } from "./look.js";
 import { emit, moveParticles } from "./particles.js";
 import { addObject, select } from "./sandbox.js";
+import { isPlayer, shareObject } from "./net.js";
 
 const preview = document.getElementById("preview");
 const previewCtx = preview.getContext("2d");
@@ -75,11 +76,18 @@ function applyScript() {
 scriptInput.oninput = applyScript;
 
 // A copy of the object goes into the sandbox, so the workbench can make more of them.
+// A player does not put it in directly: the host checks it and sends it to everyone.
 putButton.onclick = function () {
   try {
     const object = validate(JSON.parse(scriptInput.value));
+    if (isPlayer()) {
+      shareObject(object);
+      show(scriptText, "sent to the host, waiting for an answer: " + object.name, "wait");
+      return;
+    }
     addObject(object);
     select(object);
+    shareObject(object);
     show(scriptText, "put into the sandbox: " + object.name, "ok");
   } catch (error) {
     show(scriptText, "rejected: " + error.message, "bad");

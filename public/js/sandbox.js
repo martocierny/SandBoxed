@@ -79,6 +79,16 @@ export function removeObject(o) {
   if (dragged === o) dragged = null;
 }
 
+export function objectById(id) {
+  if (!id) return null;
+  return world.objects.find(function (o) { return o.id === id; }) || null;
+}
+
+// A copy of the list, so a caller can walk it while objects come and go.
+export function allObjects() {
+  return world.objects.slice();
+}
+
 export function clearObjects() {
   world.objects = [];
   world.bullets = [];
