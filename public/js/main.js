@@ -7,10 +7,14 @@ import { lookAIs, sketchAI, behaviorAI, askedFor, generate } from "./prompts.js"
 import { sketch } from "./sketch.js";
 import { validate } from "./validate.js";
 import { script, objectScript } from "./script.js";
-import { clearObjects, removeObject, onSelect, selected, setWorld } from "./sandbox.js";
+import { allObjects, clearObjects, removeObject, onSelect, selected, setWorld } from "./sandbox.js";
 import { setDraft, setScript } from "./workbench.js";
 import { showPad, getStrokes } from "./pad.js";
-import { room, savedName, hostRoom, leaveRoom } from "./room.js";
+import { room, savedName, hostRoom, joinRoom, leaveRoom } from "./room.js";
+import {
+  host, join, setNetListener, isPlayer, shareRemove, shareRules,
+  close as disconnect
+} from "./net.js";
 
 const apiText = document.getElementById("api");
 const modelText = document.getElementById("model");
@@ -33,6 +37,7 @@ const browserBox = document.getElementById("browserBox");
 const browserModel = document.getElementById("browserModel");
 const gravityBox = document.getElementById("gravity");
 const destructionBox = document.getElementById("destruction");
+const joinText = document.getElementById("joinText");
 
 // ---------- Choose the AI ----------
 
@@ -174,16 +179,32 @@ document.getElementById("remove").onclick = async function () {
   check();
 };
 
-// ---------- Screens: start, host and the sandbox ----------
+// ---------- Screens: start, host, join and the sandbox ----------
 
-const screens = ["startScreen", "hostScreen", "sandboxScreen"];
+const screens = ["startScreen", "hostScreen", "joinScreen", "sandboxScreen"];
 
 function showScreen(name) {
   screens.forEach(function (id) { document.getElementById(id).hidden = id !== name; });
   window.scrollTo(0, 0);
 }
 
-joinButton.onclick = function () { alert("Join is coming soon."); };
+// True while the player on this computer hosts the sandbox.
+let hosting = false;
+
+// True while a room is being made or joined, so a double click does nothing.
+let starting = false;
+
+joinButton.onclick = function () {
+  const joinName = document.getElementById("joinName");
+  if (!joinName.value) joinName.value = savedName();
+  show(joinText, "", "wait");
+  showScreen("joinScreen");
+  (joinName.value ? document.getElementById("joinCode") : joinName).focus();
+};
+
+document.getElementById("joinBack").onclick = function () {
+  showScreen("startScreen");
+};
 
 hostButton.onclick = function () {
   const playerName = document.getElementById("playerName");
@@ -197,8 +218,10 @@ document.getElementById("hostBack").onclick = function () {
 };
 
 // The browser checks the form first: names are needed and 2 to 8 players.
-document.getElementById("hostForm").onsubmit = function (e) {
+document.getElementById("hostForm").onsubmit = async function (e) {
   e.preventDefault();
+  if (starting) return;
+  starting = true;
   const r = hostRoom({
     player: document.getElementById("playerName").value.trim(),
     name: document.getElementById("sandboxName").value.trim(),
@@ -207,6 +230,7 @@ document.getElementById("hostForm").onsubmit = function (e) {
     gravity: document.getElementById("hostGravity").checked,
     destruction: document.getElementById("hostDestruction").value
   });
+  hosting = true;
   clearObjects();
   setDraft(null);
   setScript("");
@@ -216,24 +240,114 @@ document.getElementById("hostForm").onsubmit = function (e) {
   destructionBox.value = r.destruction;
   showRoom();
   showScreen("sandboxScreen");
+  try {
+    // The signaling server makes the room and keeps the code for the players.
+    const made = await host(r.host);
+    r.code = made.code;
+    showRoom();
+  } catch (error) {
+    show(document.getElementById("sandboxInfo"),
+      "could not make a room: " + error.message + ". The sandbox still works on this computer.", "bad");
+  } finally {
+    starting = false;
+  }
+};
+
+// The code and the players are the same for the host and for the players.
+document.getElementById("joinForm").onsubmit = async function (e) {
+  e.preventDefault();
+  if (starting) return;
+  starting = true;
+  const name = document.getElementById("joinName").value.trim();
+  const code = document.getElementById("joinCode").value.trim();
+  show(joinText, "joining...", "wait");
+  // The sandbox of the last room goes before the host sends this one.
+  clearObjects();
+  setDraft(null);
+  setScript("");
+  setWorld({ player: name });
+  try {
+    const hello = await join(code, name);
+    joinRoom(Object.assign({ player: name, code: code, players: hello.players }, hello.room));
+    hosting = false;
+    setWorld({ gravity: room.gravity, destruction: room.destruction });
+    gravityBox.checked = room.gravity;
+    destructionBox.value = room.destruction;
+    showRoom();
+    show(joinText, "", "wait");
+    showScreen("sandboxScreen");
+  } catch (error) {
+    show(joinText, "could not join: " + error.message, "bad");
+  } finally {
+    starting = false;
+  }
 };
 
 function showRoom() {
   document.getElementById("sandboxTitle").textContent = room.name;
-  document.getElementById("sandboxInfo").textContent =
-    "You host this sandbox. Players: " + room.players.length + " of " + room.maxPlayers + ". " +
-    (room.visibility === "public" ? "Anyone can join it from the list." : "Only players with the link can join.") +
-    " Joining comes soon.";
+  const codeLine = document.getElementById("roomCodeLine");
+  const codeText = document.getElementById("roomCodeText");
+  codeText.textContent = room.code || "";
+  codeLine.hidden = !room.code;
+
+  const count = "Players: " + room.players.length + " of " + room.maxPlayers + ".";
+  const names = room.players.map(function (player) {
+    return player.name + (player.host ? " (host)" : "");
+  }).join(", ");
+  const what = hosting
+    ? "You host this sandbox. Give the room code to the players who join."
+    : "The host decides the rules, and every computer checks the objects.";
+  show(document.getElementById("sandboxInfo"), what + " " + count + (names ? " " + names + "." : ""), "wait");
+
+  // Only the host changes the rules or clears the sandbox.
+  document.getElementById("rulesBox").hidden = !hosting;
 }
 
-// The leaving host ends the sandbox. Later the next best player takes over.
-document.getElementById("leave").onclick = function () {
-  if (!confirm("Leave the sandbox? It ends.")) return;
+// Leaving ends the sandbox for the host, because the sandbox lives on the host.
+function endSandbox() {
+  disconnect();
   clearObjects();
   setDraft(null);
+  setScript("");
   leaveRoom();
+  hosting = false;
   showScreen("startScreen");
+}
+
+document.getElementById("leave").onclick = function () {
+  if (!confirm(hosting ? "Leave the sandbox? It ends for everyone." : "Leave the sandbox?")) return;
+  endSandbox();
 };
+
+// The other players hear about changes in the room, or that the host is gone.
+setNetListener(function (event) {
+  if (event.type === "players") {
+    if (room) showRoom();
+  } else if (event.type === "rules") {
+    if (!room) return;
+    setWorld({ gravity: room.gravity, destruction: room.destruction });
+    gravityBox.checked = room.gravity;
+    destructionBox.value = room.destruction;
+    show(createText, "The host changed the rules.", "wait");
+  } else if (event.type === "reject") {
+    show(createText, "the host rejected it: " + event.reason, "bad");
+  } else if (event.type === "host-left") {
+    alert("The host left, so the sandbox has ended.");
+    endSandbox();
+  } else if (event.type === "full") {
+    alert("The sandbox is full.");
+    endSandbox();
+  } else if (event.type === "disconnected") {
+    // The players who are already here keep their own connection, but the room
+    // can no longer let anyone in, so its code is no longer shown.
+    if (room) room.code = "";
+    document.getElementById("roomCodeLine").hidden = true;
+    show(document.getElementById("sandboxInfo"),
+      "The signaling server is gone, so no new players can join. The players who are here stay connected.", "bad");
+  } else if (event.type === "error") {
+    show(createText, event.message, "bad");
+  }
+});
 
 // ---------- Make an object ----------
 
@@ -298,18 +412,30 @@ createButton.onclick = async function () {
   createButton.disabled = false;
 };
 
-// The rules of the sandbox. Only the host can change them.
+// The rules of the sandbox. Only the host can change them, and the players get the new ones.
 gravityBox.onchange = function () {
-  room.gravity = gravityBox.checked;
-  setWorld({ gravity: room.gravity });
+  if (!hosting) {
+    gravityBox.checked = room ? room.gravity : true;
+    return;
+  }
+  setWorld({ gravity: gravityBox.checked });
+  shareRules({ gravity: gravityBox.checked });
 };
 destructionBox.onchange = function () {
-  room.destruction = destructionBox.value;
-  setWorld({ destruction: room.destruction });
+  if (!hosting) {
+    destructionBox.value = room ? room.destruction : "all";
+    return;
+  }
+  setWorld({ destruction: destructionBox.value });
+  shareRules({ destruction: destructionBox.value });
 };
 
 document.getElementById("clearSandbox").onclick = function () {
-  if (confirm("Remove all objects from the sandbox?")) clearObjects();
+  if (!hosting) return;
+  if (!confirm("Remove all objects from the sandbox?")) return;
+  // Every object goes for every player, one at a time.
+  allObjects().forEach(function (object) { shareRemove(object); });
+  clearObjects();
 };
 
 // The Clear button of the workbench.
@@ -329,7 +455,14 @@ onSelect(function (o) {
 });
 
 function deleteSelected() {
-  if (selected) removeObject(selected);
+  if (!selected) return;
+  // A player asks the host, and the object goes when the host agrees.
+  if (isPlayer()) {
+    shareRemove(selected);
+    return;
+  }
+  removeObject(selected);
+  shareRemove(selected);
 }
 
 document.getElementById("deleteSelected").onclick = deleteSelected;

@@ -101,9 +101,24 @@ or your own AI server like Ollama or LM Studio.</p>
 </form>
 </section>
 
+<!-- ---------- Join: a sandbox that someone else hosts ---------- -->
+<section id="joinScreen" hidden>
+<h1>Join a sandbox</h1>
+<form id="joinForm">
+  <p><label>Your name<br><input id="joinName" type="text" maxlength="20" required></label></p>
+  <p><label>Room code<br><input id="joinCode" type="text" maxlength="12" spellcheck="false" required></label></p>
+  <p>
+    <button type="submit">Join the sandbox</button>
+    <button type="button" id="joinBack">Back</button>
+  </p>
+  <p id="joinText" class="wait"></p>
+</form>
+</section>
+
 <!-- ---------- The sandbox ---------- -->
 <section id="sandboxScreen" hidden>
 <h1 id="sandboxTitle"></h1>
+<p id="roomCodeLine" hidden>Room code: <strong id="roomCodeText"></strong></p>
 <p id="sandboxInfo" class="wait"></p>
 <canvas id="sandbox"></canvas>
 <p class="wait">Drag the empty space or use the mouse wheel to look around. Drag objects to move them.

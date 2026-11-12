@@ -1,12 +1,12 @@
 // SandBoxed Signaling Server
-// First version with CORS support
+// The server only helps players find the host. After that they talk over WebRTC.
 
 export class Room {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     this.host = null;
-    this.players = new Map();
+    this.players = new Map(); // playerId -> { ws, name, host }
   }
 
   async fetch(request) {
@@ -28,15 +28,29 @@ export class Room {
       const isHost = url.searchParams.get("role") === "host";
       const name = (url.searchParams.get("name") || "").trim().slice(0, 24) || "Player";
 
+      // A room has one host. The sandbox lives on that computer.
+      if (isHost && this.host) {
+        server.send(JSON.stringify({ type: "error", message: "this room already has a host" }));
+        server.close(1008, "a host is already here");
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // A player needs a host, otherwise there is nobody to connect to.
+      if (!isHost && (!this.host || this.host.ws.readyState !== 1)) {
+        server.send(JSON.stringify({ type: "host-missing", message: "there is no host in this room" }));
+        server.close(1008, "no host");
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      this.players.set(playerId, { ws: server, name, host: isHost });
+
       if (isHost) {
         this.host = { id: playerId, ws: server };
-        this.players.set(playerId, server);
         server.send(JSON.stringify({ type: "joined", role: "host", playerId }));
       } else {
-        this.players.set(playerId, server);
         server.send(JSON.stringify({ type: "joined", role: "player", playerId, name }));
 
-        if (this.host && this.host.ws.readyState === 1) {
+        if (this.host.ws.readyState === 1) {
           this.host.ws.send(JSON.stringify({
             type: "player-joined",
             playerId,
@@ -51,8 +65,18 @@ export class Room {
 
       server.addEventListener("close", () => {
         this.players.delete(playerId);
-        if (this.host && this.host.id === playerId) {
+
+        if (isHost) {
+          // The sandbox ends with its host, so the players hear that it is over.
           this.host = null;
+          this.players.forEach((other) => {
+            if (other.ws.readyState === 1) {
+              other.ws.send(JSON.stringify({ type: "host-left" }));
+            }
+          });
+          this.players.clear();
+        } else if (this.host && this.host.ws.readyState === 1) {
+          this.host.ws.send(JSON.stringify({ type: "player-left", playerId, name }));
         }
       });
 
@@ -72,8 +96,8 @@ export class Room {
 
     if (data.type === "offer" && data.to) {
       const target = this.players.get(data.to);
-      if (target && target.readyState === 1) {
-        target.send(JSON.stringify({
+      if (target && target.ws.readyState === 1) {
+        target.ws.send(JSON.stringify({
           type: "offer",
           from: fromId,
           sdp: data.sdp
@@ -93,8 +117,8 @@ export class Room {
 
     if (data.type === "ice" && data.to) {
       const target = this.players.get(data.to);
-      if (target && target.readyState === 1) {
-        target.send(JSON.stringify({
+      if (target && target.ws.readyState === 1) {
+        target.ws.send(JSON.stringify({
           type: "ice",
           from: fromId,
           candidate: data.candidate
