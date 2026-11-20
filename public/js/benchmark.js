@@ -5,8 +5,9 @@
 import { getSettings, currentAI } from "./ai.js";
 import { lookAIs, behaviorAI, askedFor, generate } from "./prompts.js";
 import { validate } from "./validate.js";
+import { getBenchmarkLookAI } from "./benchmark-look-mode.js";
 
-const benchmarkVersion = "0.2";
+const benchmarkVersion = "0.3";
 const cases = [
   { id: "red-ball", prompt: "a red ball" },
   { id: "bouncing-ball", prompt: "a bouncing blue ball" },
@@ -24,6 +25,7 @@ const tableBody = document.getElementById("results");
 const progress = document.getElementById("progress");
 const summary = document.getElementById("summary");
 const selectedModel = document.getElementById("selectedModel");
+const lookModeSelect = document.getElementById("lookMode");
 let rows = [];
 let stopping = false;
 
@@ -86,9 +88,9 @@ async function runStage(ai, prompt) {
   }
 }
 
-async function runCase(testCase, repeat, metadata) {
+async function runCase(testCase, repeat, metadata, lookAI) {
   const started = performance.now();
-  const lookStage = await runStage(lookAIs.icon, testCase.prompt);
+  const lookStage = await runStage(lookAI, testCase.prompt);
   let behaviorStage = { status: "not-run", retried: false, ms: null, data: null, error: "" };
   let filteredBehavior = null;
   let normalizedBehavior = null;
@@ -102,7 +104,7 @@ async function runCase(testCase, repeat, metadata) {
         filteredBehavior = askedFor(behaviorStage.data, testCase.prompt);
         const valid = validate({
           name: lookStage.data.name,
-          look: lookAIs.icon.toLook(lookStage.data),
+          look: lookAI.toLook(lookStage.data),
           behavior: filteredBehavior
         });
         normalizedBehavior = {
@@ -127,6 +129,7 @@ async function runCase(testCase, repeat, metadata) {
     provider: metadata.provider,
     model: metadata.model,
     hardware: metadata.hardware,
+    lookMode: metadata.lookMode,
     testId: testCase.id,
     prompt: testCase.prompt,
     repeat: repeat,
@@ -157,6 +160,7 @@ function renderRow(item) {
   const row = document.createElement("tr");
   addCell(row, String(item.repeat));
   addCell(row, item.prompt);
+  addCell(row, item.lookMode);
   addCell(row, item.lookStatus);
   addCell(row, item.behaviorStatus);
   addCell(row, item.validation);
@@ -185,7 +189,7 @@ function showSummary() {
   const accepted = rows.filter(function (r) { return r.validation === "pass"; }).length;
   const matched = rows.filter(function (r) { return r.expectedBehavior.result === "pass"; }).length;
   const retries = rows.filter(function (r) { return r.lookRetried || r.behaviorRetried; }).length;
-  summary.textContent = rows.length + " runs; " + accepted + " accepted; " + matched +
+  summary.textContent = rows.length + " " + rows[0].lookMode + " runs; " + accepted + " accepted; " + matched +
     " passed the limited behavior check; " + retries + " needed at least one validation retry.";
 }
 
@@ -196,9 +200,12 @@ async function start() {
   jsonButton.disabled = true;
   csvButton.disabled = true;
   const settings = Object.assign({}, getSettings());
+  const lookMode = lookModeSelect.value;
+  const lookAI = getBenchmarkLookAI(lookMode, lookAIs);
   const metadata = {
     provider: settings.ai,
     model: modelName(settings),
+    lookMode: lookMode,
     hardware: document.getElementById("hardware").value.trim() || "not specified",
     codeRef: document.getElementById("codeRef").value.trim() || "not recorded"
   };
@@ -206,6 +213,7 @@ async function start() {
   document.getElementById("repeats").value = String(repeats);
   runButton.disabled = true;
   stopButton.disabled = false;
+  lookModeSelect.disabled = true;
   try {
     progress.textContent = "Checking the selected model...";
     const aiStatus = await currentAI().status(settings);
@@ -217,7 +225,7 @@ async function start() {
       for (const testCase of cases) {
         if (stopping) break outer;
         progress.textContent = "Run " + (rows.length + 1) + "/" + total + ": " + testCase.prompt;
-        const item = await runCase(testCase, repeat, metadata);
+        const item = await runCase(testCase, repeat, metadata, lookAI);
         rows.push(item);
         renderRow(item);
         showSummary();
@@ -231,6 +239,7 @@ async function start() {
   } finally {
     runButton.disabled = false;
     stopButton.disabled = true;
+    lookModeSelect.disabled = false;
   }
 }
 
@@ -253,7 +262,7 @@ function csvCell(value) {
   return '"' + valueText.replace(/"/g, '""') + '"';
 }
 
-const columns = ["timestamp", "benchmarkVersion", "codeRef", "provider", "model", "hardware", "testId", "prompt", "repeat", "lookStatus", "lookRetried", "lookMs", "behaviorStatus", "behaviorRetried", "behaviorMs", "validation", "totalMs", "expectedResult", "expectedExplanation", "error"];
+const columns = ["timestamp", "benchmarkVersion", "codeRef", "provider", "model", "hardware", "lookMode", "testId", "prompt", "repeat", "lookStatus", "lookRetried", "lookMs", "behaviorStatus", "behaviorRetried", "behaviorMs", "validation", "totalMs", "expectedResult", "expectedExplanation", "error"];
 
 runButton.onclick = start;
 stopButton.onclick = function () { stopping = true; progress.textContent = "Stopping after the current test case..."; };
