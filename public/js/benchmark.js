@@ -5,8 +5,9 @@
 import { getSettings, currentAI } from "./ai.js";
 import { lookAIs, behaviorAI, askedFor, generate } from "./prompts.js";
 import { validate } from "./validate.js";
+import { checkIconReference } from "./benchmark-icon-reference.js";
 
-const benchmarkVersion = "0.2";
+const benchmarkVersion = "0.3";
 const cases = [
   { id: "red-ball", prompt: "a red ball" },
   { id: "bouncing-ball", prompt: "a bouncing blue ball" },
@@ -137,6 +138,7 @@ async function runCase(testCase, repeat, metadata) {
     behaviorRetried: behaviorStage.retried,
     behaviorMs: behaviorStage.ms,
     validation: validation,
+    iconReference: checkIconReference(testCase.id, lookStage.data),
     expectedBehavior: validation === "pass" ? expectedBehavior(testCase.id, normalizedBehavior) : { result: "not-run", explanation: "Final object not accepted" },
     totalMs: Math.round(performance.now() - started),
     generatedLook: lookStage.data,
@@ -161,6 +163,7 @@ function renderRow(item) {
   addCell(row, item.behaviorStatus);
   addCell(row, item.validation);
   addCell(row, item.expectedBehavior.result);
+  addCell(row, item.iconReference.result);
   addCell(row, String(item.totalMs));
   const cell = document.createElement("td");
   const detail = document.createElement("details");
@@ -169,6 +172,7 @@ function renderRow(item) {
   const output = document.createElement("pre");
   output.textContent = JSON.stringify({
     expectedCheck: item.expectedBehavior,
+    iconReference: item.iconReference,
     error: item.error,
     look: item.generatedLook,
     generatedBehavior: item.generatedBehavior,
@@ -184,9 +188,11 @@ function renderRow(item) {
 function showSummary() {
   const accepted = rows.filter(function (r) { return r.validation === "pass"; }).length;
   const matched = rows.filter(function (r) { return r.expectedBehavior.result === "pass"; }).length;
+  const iconsMatched = rows.filter(function (r) { return r.iconReference.result === "match"; }).length;
   const retries = rows.filter(function (r) { return r.lookRetried || r.behaviorRetried; }).length;
   summary.textContent = rows.length + " runs; " + accepted + " accepted; " + matched +
-    " passed the limited behavior check; " + retries + " needed at least one validation retry.";
+    " passed the limited behavior check; " + iconsMatched +
+    " matched the reference icons; " + retries + " needed at least one validation retry.";
 }
 
 async function start() {
@@ -253,7 +259,7 @@ function csvCell(value) {
   return '"' + valueText.replace(/"/g, '""') + '"';
 }
 
-const columns = ["timestamp", "benchmarkVersion", "codeRef", "provider", "model", "hardware", "testId", "prompt", "repeat", "lookStatus", "lookRetried", "lookMs", "behaviorStatus", "behaviorRetried", "behaviorMs", "validation", "totalMs", "expectedResult", "expectedExplanation", "error"];
+const columns = ["timestamp", "benchmarkVersion", "codeRef", "provider", "model", "hardware", "testId", "prompt", "repeat", "lookStatus", "lookRetried", "lookMs", "behaviorStatus", "behaviorRetried", "behaviorMs", "validation", "totalMs", "expectedResult", "expectedExplanation", "iconResult", "iconExplanation", "error"];
 
 runButton.onclick = start;
 stopButton.onclick = function () { stopping = true; progress.textContent = "Stopping after the current test case..."; };
@@ -263,7 +269,9 @@ csvButton.onclick = function () {
   rows.forEach(function (row) {
     const flat = Object.assign({}, row, {
       expectedResult: row.expectedBehavior.result,
-      expectedExplanation: row.expectedBehavior.explanation
+      expectedExplanation: row.expectedBehavior.explanation,
+      iconResult: row.iconReference.result,
+      iconExplanation: row.iconReference.explanation
     });
     lines.push(columns.map(function (key) { return csvCell(flat[key]); }).join(","));
   });
